@@ -17,9 +17,9 @@ from agno.embedder.google import GeminiEmbedder
 app = FastAPI()
 
 # === API Keys ===
-GOOGLE_API_KEY = os.getenv(GOOGLE_API_KEY)  # flash
-GOOGLE_API_KEY_2 = os.getenv(GOOGLE_API_KEY_2)  # embedder
-PINECONE_API_KEY = os.getenv(PINECONE_API_KEY)
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")  # flash
+GOOGLE_API_KEY_2 = os.getenv("GOOGLE_API_KEY_2")  # embedder
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 
 # === Rate Limiting ===
 last_request_time = 0
@@ -140,4 +140,5 @@ async def ask_document_questions(
         pass
 
     return {"answers": answers}
+
 
