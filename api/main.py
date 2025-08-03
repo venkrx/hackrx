@@ -34,8 +34,8 @@ vector_db = PineconeDb(
     spec={"serverless": {"cloud": "aws", "region": "us-east-1"}},
     api_key=PINECONE_API_KEY,
     embedder=GeminiEmbedder(api_key=GOOGLE_API_KEY_2),
-    use_hybrid_search=True,
-    hybrid_alpha=0.5,
+    use_hybrid_search=False
+    
 )
 
 # === Pydantic Models ===
@@ -140,5 +140,6 @@ async def ask_document_questions(
         pass
 
     return {"answers": answers}
+
 
 
