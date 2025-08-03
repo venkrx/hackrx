@@ -1,6 +1,0 @@
-agno
-pinecone == 5.4.2
-fastapi
-pydantic
-requests
-python-multipart
