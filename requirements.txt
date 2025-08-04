@@ -1,8 +1,10 @@
 fastapi
 uvicorn
-requests
 pydantic
-python-multipart
-agno
-pinecone-client==5.4.2
-google-genai
+requests
+PyMuPDF==1.23.26 --only-binary :all:
+pinecone==7.0.2
+pinecone-client
+google-generativeai
+tqdm
+
