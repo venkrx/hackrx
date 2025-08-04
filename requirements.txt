@@ -1,11 +1,8 @@
-pinecone == 7.0.2
 fastapi
-pydantic
+uvicorn
 requests
+pydantic
 python-multipart
+agno
+pinecone-client==5.4.2
 google-genai
-pypdf
-packaging
-pinecone-text
-
-
