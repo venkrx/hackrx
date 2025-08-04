@@ -1,44 +1,35 @@
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from typing import List
-import requests
-import tempfile
-import os
-import asyncio
+import requests, tempfile, os, json, hashlib
+import fitz  # PyMuPDF
+from pinecone import Pinecone
+import google.generativeai as genai
+from tqdm import tqdm
 import time
+# === API Keys ===
+INDEX_NAME = "hackrx-rag-llama"
+GOOGLE_API_KEY = "AIzaSyBXHgQmUsJEbcEZIMZQ41z1SLsGdCBKXQg"
+PINECONE_API_KEY = "pcsk_6syiPH_E34w5TX3cHn74we6fjV41qiiig5McBQxFQ2J1Yo8sMB1JfP6KAKxuNYvd8te495"
 
-from agno.agent import Agent
-from agno.models.google import Gemini
-from agno.knowledge.pdf import PDFKnowledgeBase
-from agno.vectordb.pineconedb import PineconeDb
-from agno.embedder.google import GeminiEmbedder
+# === Pinecone Init ===
+pc = Pinecone(api_key=PINECONE_API_KEY)
+if not pc.has_index(INDEX_NAME):
+    pc.create_index_for_model(
+        name=INDEX_NAME,
+        cloud="aws",
+        region="us-east-1",
+        embed={
+            "model": "llama-text-embed-v2",
+            "field_map": {"text": "chunk_text"}
+        }
+    )
+index = pc.Index(INDEX_NAME)
 
-# === FastAPI App Initialization ===
+# === FastAPI App ===
 app = FastAPI()
 
-# === API Keys ===
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")  # flash
-GOOGLE_API_KEY_2 = os.getenv("GOOGLE_API_KEY_2")  # embedder
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-
-# === Rate Limiting ===
-last_request_time = 0
-REQUEST_INTERVAL = 12  # 12 seconds between requests (5 requests/minute)
-
-# === Pinecone Setup ===
-PINECONE_INDEX_NAME = "ragtest-0308v1"
-vector_db = PineconeDb(
-    name=PINECONE_INDEX_NAME,
-    dimension=1536,
-    metric="cosine",
-    spec={"serverless": {"cloud": "aws", "region": "us-east-1"}},
-    api_key=PINECONE_API_KEY,
-    embedder=GeminiEmbedder(api_key=GOOGLE_API_KEY_2),
-    use_hybrid_search=False
-    
-)
-
-# === Pydantic Models ===
+# === Schemas ===
 class QueryRequest(BaseModel):
     documents: str
     questions: List[str]
@@ -46,100 +37,113 @@ class QueryRequest(BaseModel):
 class QueryResponse(BaseModel):
     answers: List[str]
 
-# === Rate Limited Helper Function ===
-async def get_answer_with_rate_limit(agent, question: str, retries: int = 3, timeout: int = 60):
-    global last_request_time
-    
-    for attempt in range(retries):
-        try:
-            current_time = time.time()
-            time_since_last = current_time - last_request_time
-            if time_since_last < REQUEST_INTERVAL:
-                wait_time = REQUEST_INTERVAL - time_since_last
-                await asyncio.sleep(wait_time)
-            
-            last_request_time = time.time()
+# === Helpers ===
+def get_pdf_hash(url: str) -> str:
+    return hashlib.sha256(url.encode()).hexdigest()
 
-            response = await asyncio.wait_for(
-                asyncio.to_thread(agent.run, question),
-                timeout=timeout
-            )
-            return response
+def extract_text(path: str) -> str:
+    doc = fitz.open(path)
+    return "\n".join([page.get_text() for page in doc])
 
-        except asyncio.TimeoutError:
-            if attempt < retries - 1:
-                await asyncio.sleep(5)
-            else:
-                return "Error: Request timed out after 60 seconds"
+def upsert_in_batches(index, records, namespace="ragtest", batch_size=96):
+    for i in tqdm(range(0, len(records), batch_size), desc="Upserting to Pinecone"):
+        batch = records[i:i + batch_size]
+        if i % 5 == 0:
+           time.sleep(5)
+        index.upsert_records(namespace=namespace, records=batch)
 
-        except Exception as e:
-            err = str(e)
-            if "RESOURCE_EXHAUSTED" in err or "429" in err or "503" in err:
-                if attempt < retries - 1:
-                    wait_time = 30 * (attempt + 1)
-                    await asyncio.sleep(wait_time)
-                else:
-                    return "Error: Gemini rate limit exceeded. Please try again later."
-            else:
-                return f"Error: {err}"
-
-    return "Error: All retry attempts failed"
-
-# === POST Endpoint ===
+# === Main Endpoint ===
 @app.post("/hackrx/run", response_model=QueryResponse)
-async def ask_document_questions(
-    body: QueryRequest,
-    authorization: str = Header(...)
-):
+def run(body: QueryRequest, authorization: str = Header(...)):
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid Authorization header")
 
-    try:
-        response = requests.get(body.documents, timeout=30)
-        response.raise_for_status()
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_pdf:
-            temp_pdf.write(response.content)
-            pdf_path = temp_pdf.name
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error downloading PDF: {str(e)}")
+    doc_id = get_pdf_hash(body.documents)
 
     try:
-        knowledge_base = PDFKnowledgeBase(path=pdf_path, vector_db=vector_db)
-        knowledge_base.load(recreate=False, upsert=True)  # Only embed once
-
-        agent = Agent(
-            system_message="You are a helpful assistant that answers questions based on retrieved documents." \
-            " Keep responses concise and relevant. Answer in one or two sentences only. " \
-            " If there are any quantifiable data available to support your answer, include the same. "\
-            "The answer has to be accurate and found in the retrieved content.",
-            model=Gemini(id="gemini-2.5-pro", api_key=GOOGLE_API_KEY),
-            knowledge=knowledge_base,
-            show_tool_calls=False,
-            markdown=True,
-        )
+        # Step 1: Download PDF
+        res = requests.get(body.documents, timeout=30)
+        res.raise_for_status()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(res.content)
+            pdf_path = tmp.name
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Vector DB error: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"PDF download error: {str(e)}")
 
-    # === PARALLEL QUESTION HANDLING ===
-    async def ask_question(question):
+    try:
+        # Step 2: Extract and Chunk Text
+        text = extract_text(pdf_path)
+        chunk_size = 1000
+        overlap = 100
+
+        chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size - overlap)]
+
+        # Step 3: Prepare records with chunk_text (auto-embedded by Pinecone)
+        records = [
+            {
+                "id": f"{doc_id}-{i}",
+                "chunk_text": chunk
+            }
+            for i, chunk in enumerate(chunks)
+        ]
+        upsert_in_batches(index, records, namespace="hackrx")
+
+        # Step 4: Query Pinecone per-question and ask Gemini
+        genai.configure(api_key=GOOGLE_API_KEY)
+        model = genai.GenerativeModel("gemini-2.5-flash")
+
+        all_answers = []
+
+        for question in body.questions:
+            results = index.search(
+                namespace="hackrx",
+                query={
+                    "top_k": 10,
+                    "inputs": {
+                        "text": question
+                    }
+                },
+                rerank={
+                    "model": "bge-reranker-v2-m3",
+                    "top_n": 5,
+                    "rank_fields": ["chunk_text"]
+                }
+            )
+            top_chunks = [hit["fields"]["chunk_text"] for hit in results["result"]["hits"]]
+
+
+
+            context = "\n\n".join(top_chunks)
+            prompt = f"""
+You are a helpful assistant.
+Use ONLY the following document context to answer the question.
+
+
+
+Context:
+\"\"\"{context}\"\"\"
+
+Question: {question}
+
+Answer the question clearly in 1-2 sentences.
+"""
+
+            try:
+                response = model.generate_content(prompt)
+                answer = response.text.strip()
+                if answer.startswith("```"):
+                    answer = answer.replace("```json", "").replace("```", "").strip()
+                all_answers.append(answer)
+            except Exception as e:
+                all_answers.append(f"Gemini Error: {str(e)}")
+
+    except Exception as e:
+        all_answers = [f"Gemini Error: {str(e)}"]
+    finally:
         try:
-            print(f"Processing: {question[:50]}...")
-            response = await get_answer_with_rate_limit(agent, question)
-            if isinstance(response, str):
-                return response
-            else:
-                return response.content.strip()
-        except Exception as e:
-            return f"Error: {str(e)}"
+            os.remove(pdf_path)
+        except:
+            pass
 
-    answers = await asyncio.gather(*(ask_question(q) for q in body.questions))
-
-    try:
-        os.remove(pdf_path)
-    except Exception:
-        pass
-
-    return {"answers": answers}
-
-
+    return {"answers": all_answers}
 
