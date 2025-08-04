@@ -1,5 +1,5 @@
-agno
-pinecone == 5.4.2
+
+pinecone == 7.0.2
 fastapi
 pydantic
 requests
@@ -8,3 +8,4 @@ google-genai
 pypdf
 packaging
 pinecone-text
+
