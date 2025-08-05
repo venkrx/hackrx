@@ -7,8 +7,14 @@ from pinecone import Pinecone
 import google.generativeai as genai
 from tqdm import tqdm
 import time
+from datetime import datetime
+
 # === API Keys ===
-INDEX_NAME = "hackrx-rag-llama"
+#INDEX_NAME = "hackrx-rag-llama"
+
+INDEX_NAME = "check-rag-llama"
+WRITE_INDEX_NAME = "write-rag-llama"
+
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 
@@ -24,7 +30,23 @@ if not pc.has_index(INDEX_NAME):
             "field_map": {"text": "chunk_text"}
         }
     )
+
+# === Pinecone write ===
+pwc = Pinecone(api_key=PINECONE_API_KEY)
+if not pwc.has_index(WRITE_INDEX_NAME):
+    pwc.create_index_for_model(
+        name=WRITE_INDEX_NAME,
+        cloud="aws",
+        region="us-east-1",
+        embed={
+            "model": "llama-text-embed-v2",
+            "field_map": {"text": "chunk_text"}
+        }
+    )
+
 index = pc.Index(INDEX_NAME)
+windex = pwc.Index(WRITE_INDEX_NAME)
+
 
 # === FastAPI App ===
 app = FastAPI()
@@ -57,7 +79,24 @@ def upsert_in_batches(index, records, namespace="ragtest", batch_size=96):
 def run(body: QueryRequest, authorization: str = Header(...)):
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid Authorization header")
+    
 
+    # Capture the Request 
+    
+    current_time = datetime.now()
+    doc_id = 'curl-request'+str(current_time.strftime("%H:%M:%S"))
+    
+    wrtext = [
+            {
+                "id": f"{doc_id}-{1}",
+                "chunk_text": str(body)
+            }
+          ]
+
+    windex.upsert_records(namespace="writerag", records=wrtext)
+
+    # Start the Process 
+    
     doc_id = get_pdf_hash(body.documents)
 
     try:
@@ -98,14 +137,14 @@ def run(body: QueryRequest, authorization: str = Header(...)):
             results = index.search(
                 namespace="hackrx",
                 query={
-                    "top_k": 10,
+                    "top_k": 20,
                     "inputs": {
                         "text": question
                     }
                 },
                 rerank={
                     "model": "bge-reranker-v2-m3",
-                    "top_n": 5,
+                    "top_n": 15,
                     "rank_fields": ["chunk_text"]
                 }
             )
