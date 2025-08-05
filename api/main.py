@@ -9,8 +9,8 @@ from tqdm import tqdm
 import time
 # === API Keys ===
 INDEX_NAME = "hackrx-rag-llama"
-GOOGLE_API_KEY = "AIzaSyBXHgQmUsJEbcEZIMZQ41z1SLsGdCBKXQg"
-PINECONE_API_KEY = "pcsk_6syiPH_E34w5TX3cHn74we6fjV41qiiig5McBQxFQ2J1Yo8sMB1JfP6KAKxuNYvd8te495"
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 
 # === Pinecone Init ===
 pc = Pinecone(api_key=PINECONE_API_KEY)
@@ -146,4 +146,5 @@ Answer the question clearly in 1-2 sentences.
             pass
 
     return {"answers": all_answers}
+
 
