@@ -9,8 +9,8 @@ from tqdm import tqdm
 import time
 # === API Keys ===
 INDEX_NAME = "hackrx-rag-llama"
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+GOOGLE_API_KEY = "AIzaSyBXHgQmUsJEbcEZIMZQ41z1SLsGdCBKXQg"
+PINECONE_API_KEY = "pcsk_6syiPH_E34w5TX3cHn74we6fjV41qiiig5McBQxFQ2J1Yo8sMB1JfP6KAKxuNYvd8te495"
 
 # === Pinecone Init ===
 pc = Pinecone(api_key=PINECONE_API_KEY)
@@ -73,10 +73,7 @@ def run(body: QueryRequest, authorization: str = Header(...)):
     try:
         # Step 2: Extract and Chunk Text
         text = extract_text(pdf_path)
-        chunk_size = 1000
-        overlap = 100
-
-        chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size - overlap)]
+        chunks = [text[i:i + 500] for i in range(0, len(text), 500)]
 
         # Step 3: Prepare records with chunk_text (auto-embedded by Pinecone)
         records = [
@@ -90,7 +87,7 @@ def run(body: QueryRequest, authorization: str = Header(...)):
 
         # Step 4: Query Pinecone per-question and ask Gemini
         genai.configure(api_key=GOOGLE_API_KEY)
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = genai.GenerativeModel("gemini-2.5-pro")
 
         all_answers = []
 
@@ -98,14 +95,14 @@ def run(body: QueryRequest, authorization: str = Header(...)):
             results = index.search(
                 namespace="hackrx",
                 query={
-                    "top_k": 10,
+                    "top_k": 20,
                     "inputs": {
                         "text": question
                     }
                 },
                 rerank={
                     "model": "bge-reranker-v2-m3",
-                    "top_n": 5,
+                    "top_n": 10,
                     "rank_fields": ["chunk_text"]
                 }
             )
@@ -117,8 +114,6 @@ def run(body: QueryRequest, authorization: str = Header(...)):
             prompt = f"""
 You are a helpful assistant.
 Use ONLY the following document context to answer the question.
-
-
 
 Context:
 \"\"\"{context}\"\"\"
@@ -146,5 +141,4 @@ Answer the question clearly in 1-2 sentences.
             pass
 
     return {"answers": all_answers}
-
 
