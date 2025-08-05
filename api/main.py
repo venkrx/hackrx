@@ -126,8 +126,10 @@ def run(body: QueryRequest, authorization: str = Header(...)):
             for i, chunk in enumerate(chunks)
         ]
         upsert_in_batches(index, records, namespace="hackrx")
+        
 
         # Step 4: Query Pinecone per-question and ask Gemini
+        time.sleep(5)
         genai.configure(api_key=GOOGLE_API_KEY)
         model = genai.GenerativeModel("gemini-2.5-flash")
 
@@ -185,5 +187,6 @@ Answer the question clearly in 1-2 sentences.
             pass
 
     return {"answers": all_answers}
+
 
 
