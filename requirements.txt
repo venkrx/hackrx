@@ -2,9 +2,10 @@ fastapi
 uvicorn
 pydantic
 requests
-PyMuPDF==1.23.26 --only-binary :all:
+PyMuPDF==1.26.3
 pinecone==7.0.2
 pinecone-client
 google-generativeai
 tqdm
+
 
