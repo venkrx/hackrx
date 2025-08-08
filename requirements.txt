@@ -7,5 +7,4 @@ pinecone==7.0.2
 pinecone-client
 google-generativeai
 tqdm
-
-
+bs4
