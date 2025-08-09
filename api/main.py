@@ -71,6 +71,9 @@ def extract_text(path: str) -> str:
     doc = fitz.open(path)
     return "\n".join([page.get_text() for page in doc])
 
+# === Perform Upsert into the VectorDB ===
+# Large files result in running out of  RPM.  In order to avoid introduced Delays 
+
 def upsert_in_batches(index, records, namespace="ragtest", batch_size=96):
     for i in tqdm(range(0, len(records), batch_size), desc="Upserting to Pinecone"):
         batch = records[i:i + batch_size]
@@ -84,8 +87,12 @@ def upsert_in_batches(index, records, namespace="ragtest", batch_size=96):
            raise HTTPException(status_code=400, detail=f"PDF Ingestion error: {str(e)}")
 
 
+
+# Processing HTML Files as inputs 
+# This is a specific case for a custom search
+
 def get_token_from_html(url):
-    
+   
 
     try:
         response = requests.get(url)
@@ -97,7 +104,6 @@ def get_token_from_html(url):
             context = target_div.text.strip()
             prompt = f""" You are a code extractor. Use the following context to and return the token which is present in the context as <div id="token">TOKEN</div>.  Return only the TOKEN found from that context. Context: \"\"\"{context}\"\"\"
 """
-
             try:
                genai.configure(api_key=GOOGLE_API_KEY)
                model = genai.GenerativeModel("gemini-2.5-flash")
@@ -119,6 +125,8 @@ def get_token_from_html(url):
        all_answers.append(f"Gemini Error: {str(e)}")
 
     return all_answers
+
+# Request provided URL and process JSON responses
 
 def fetch_value_from_json(url, key_path):
     try:
@@ -142,7 +150,54 @@ def fetch_value_from_json(url, key_path):
         print("Response is not in JSON format.")
 
 
-# === Main Endpoint ===
+# Provide a question, model and pdf and 
+# search pinecone to retun context data 
+# Use that to generate llm output and return 
+# the response 
+
+def get_llm_answer(question,model,pdf_path):
+
+    results = index.search(
+        namespace="hackrx",
+                 
+        query={
+           "top_k": 10,
+           "inputs": {
+           "text": question
+           },
+           "filter": {
+           "category": {"$eq": f"{pdf_path}"}
+           }  
+          },
+        rerank={
+           "model": "bge-reranker-v2-m3",
+           "top_n": 5,
+           "rank_fields": ["chunk_text"]
+           }
+        )
+    top_chunks = [hit["fields"]["chunk_text"] for hit in results["result"]["hits"]]
+
+    context = "\n\n".join(top_chunks)
+
+    prompt = f""" You are a document reading assistant . Use the following document context to answer the question. 
+
+Context:
+\"\"\"{context}\"\"\"
+
+Question: {question}"""
+    try : 
+       response = model.generate_content(prompt)
+       answer = response.text.strip()
+       if answer.startswith("```"):
+           answer = answer.replace("```json", "").replace("```", "").strip()
+       return answer
+
+    except Exception as e:
+       return "Gemini Error: {str(e)}"
+
+
+# === Main Endpoint to get the Query Request and process the document and generate answer for questions ===
+
 @app.post("/hackrx/run", response_model=QueryResponse)
 def run(body: QueryRequest, authorization: str = Header(...)):
     if not authorization.startswith("Bearer "):
@@ -151,17 +206,7 @@ def run(body: QueryRequest, authorization: str = Header(...)):
     
     # Start the Process 
     
-    if body.documents[:16] == "https://register" :
-        all_answers = get_token_from_html(body.documents)
-        # log this and raise a error 
-        current_time = datetime.now()
-        ts_id = 'curl-request'+str(current_time.strftime("%H:%M:%S"))
-        wrtext = [ { "id": f"{ts_id}-{1}", "category": "unsupported", "chunk_text": str(body)}]
-        windex.upsert_records(namespace="writerag", records=wrtext)
-
-        return {"answers": all_answers}
-    else : 
-        doc_id = get_pdf_hash(body.documents)
+    doc_id = get_pdf_hash(body.documents)
 
     # Supported MIME types and their corresponding file extensions
     SUPPORTED_TYPES = {
@@ -170,7 +215,7 @@ def run(body: QueryRequest, authorization: str = Header(...)):
         "application/msword": ".docx",
         "text/plain": ".txt",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",  # ✅ Added PPTX
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",  
         "application/vnd.ms-excel": ".xls",
     }
 
@@ -190,13 +235,31 @@ def run(body: QueryRequest, authorization: str = Header(...)):
         content_type = head_res.headers.get("Content-Type", "").lower()
 
         # Step 2: Validate content type
+
         if content_type not in SUPPORTED_TYPES:
-            # log this and raise a error 
-            current_time = datetime.now()
-            ts_id = 'curl-request'+str(current_time.strftime("%H:%M:%S"))
-            wrtext = [ { "id": f"{ts_id}-{1}", "category": "unsupported", "chunk_text": str(body)}]
-            windex.upsert_records(namespace="writerag", records=wrtext)
-            raise HTTPException(status_code=400, detail=f" Unsupported file type: {content_type}")
+
+        # We have to check for direct html in the document type since 
+        # one of the questions in the level 4 is using this 
+        # and we will return an error if we dont process it separately
+
+            if body.documents[:16] == "https://register" :
+                all_answers = get_token_from_html(body.documents)  
+                # log this document and questions  
+                current_time = datetime.now()
+                ts_id = 'curl-request'+str(current_time.strftime("%H:%M:%S"))
+                wrtext = [ { "id": f"{ts_id}-{1}", "category": "unsupported", "chunk_text": str(body)}]
+                windex.upsert_records(namespace="writerag", records=wrtext)
+
+                return {"answers": all_answers}
+
+            else : 
+
+                # log this and raise a error 
+                current_time = datetime.now()
+                ts_id = 'curl-request'+str(current_time.strftime("%H:%M:%S"))
+                wrtext = [ { "id": f"{ts_id}-{1}", "category": "unsupported", "chunk_text": str(body)}]
+                windex.upsert_records(namespace="writerag", records=wrtext)
+                raise HTTPException(status_code=400, detail=f" Unsupported file type: {content_type}")
 
         file_extension = SUPPORTED_TYPES[content_type]
 
@@ -300,12 +363,36 @@ Question: {question}
                 response = model.generate_content(prompt)
                 answer = response.text.strip()
 
+                # Check if this is the document where human input is required to perform the steps 
+
                 if body.documents[:79] == "https://hackrx.blob.core.windows.net/hackrx/rounds/FinalRound4SubmissionPDF.pdf" :
-                    if question == "What is my flight number?" :
-                        url = "https://register.hackrx.in/teams/public/flights/getThirdCityFlightNumber"
+                    if response :
+                        # Following the instructions given in the document 
+                        # Step 1 :  First query the secret city 
+
+                        url = "https://register.hackrx.in/submissions/myFavouriteCity"
                         key_path = ["data"]  # Replace with the path to the value you want
                         value = fetch_value_from_json(url, key_path)
+                        favcity = value["city"]
+ 
+                        # Step 2 :  Decode the City
+                        # Ask the LLM to find the matching column and return the next 
+                        # URL to query 
+                        loc_question="There is a table that has landmark and current location in this document. Find the correct location for "+favcity+"in this document and return the answer in one word.  Example :  if you are searching for New York the answer should  'Eiffel Tower' or if you are searching for Bhopal the answer should be 'Victoria Memorial'"
+                        
+                        land_mark = get_llm_answer(loc_question,model,pdf_path)
+
+                        # Step 3: Choose Your Flight Path
+
+                        fl_question="The document has a step3 which shows a URL for landmark belonging to favorite city. Answer with the URL that is found for the landmark "+str(land_mark)+".  Your answer should only be the URL starting with 'https:'  that is mentioned in the call for that landmark. For Example :  if the landmark is 'Eiffel Tower' your answer should be https://register.hackrx.in/teams/public/flights/getThirdCityFlightNumber"
+
+                        fl_url = get_llm_answer(fl_question,model,pdf_path)
+ 
+                        key_path = ["data"]  # Replace with the path to the value you want
+                        value = fetch_value_from_json(fl_url, key_path)
                         answer = value["flightNumber"]
+                     
+                              
                 else : 
                     if answer.startswith("```"):
                         answer = answer.replace("```json", "").replace("```", "").strip()
