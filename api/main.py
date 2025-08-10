@@ -249,7 +249,7 @@ def run(body: QueryRequest, authorization: str = Header(...)):
                 current_time = datetime.now()
                 ts_id = 'curl-request'+str(current_time.strftime("%H:%M:%S"))
                 wrtext = [ { "id": f"{ts_id}-{1}", "category": "unsupported", "chunk_text": str(body)}]
-                #windex.upsert_records(namespace="writerag", records=wrtext)
+                windex.upsert_records(namespace="writerag", records=wrtext)
 
                 return {"answers": all_answers}
 
@@ -259,7 +259,7 @@ def run(body: QueryRequest, authorization: str = Header(...)):
                 current_time = datetime.now()
                 ts_id = 'curl-request'+str(current_time.strftime("%H:%M:%S"))
                 wrtext = [ { "id": f"{ts_id}-{1}", "category": "unsupported", "chunk_text": str(body)}]
-                #windex.upsert_records(namespace="writerag", records=wrtext)
+                windex.upsert_records(namespace="writerag", records=wrtext)
                 raise HTTPException(status_code=400, detail=f" Unsupported file type: {content_type}")
 
         file_extension = SUPPORTED_TYPES[content_type]
@@ -297,7 +297,7 @@ def run(body: QueryRequest, authorization: str = Header(...)):
             }
           ]
 
-    #windex.upsert_records(namespace="writerag", records=wrtext)
+    windex.upsert_records(namespace="writerag", records=wrtext)
 
     try:
         # Step 2: Extract and Chunk Text
