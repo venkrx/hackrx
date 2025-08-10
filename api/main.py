@@ -79,7 +79,7 @@ def upsert_in_batches(index, records, namespace="ragtest", batch_size=96):
     for i in tqdm(range(0, len(records), batch_size), desc="Upserting to Pinecone"):
         batch = records[i:i + batch_size]
         if i % 5 == 0:
-           time.sleep(1)
+           time.sleep(3)
         #if (i == 12)  or (i == 24) :
           # time.sleep(10)
         try:
@@ -321,7 +321,7 @@ def run(body: QueryRequest, authorization: str = Header(...)):
             for i, chunk in enumerate(chunks)
         ]
         upsert_in_batches(index, records, namespace="hackrx")
-        time.sleep(3)
+        time.sleep(10)
 
         # Step 4: Query Pinecone per-question and ask Gemini
         genai.configure(api_key=GOOGLE_API_KEY)
